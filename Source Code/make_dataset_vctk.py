@@ -5,10 +5,10 @@ import os
 import glob
 import re
 from collections import defaultdict
-#from tacotron.audio import load_wav, spectrogram, melspectrogram
-from tacotron.norm_utils import get_spectrograms 
+from norm_utils import get_spectrograms 
 
-def read_speaker_info(path='VCTK-Corpus/speaker-info.txt'):
+def read_speaker_info(path='MixtureCorpus/speaker-info.txt'):
+    #讀出speaker資訊
     accent2speaker = defaultdict(lambda: [])
     with open(path) as f:
         splited_lines = [line.strip().split() for line in f][1:]
@@ -34,21 +34,22 @@ if __name__ == '__main__':
     with h5py.File(h5py_path, 'w') as f_h5:
         filenames = sorted(glob.glob(os.path.join(root_dir, 'wav48/*/*.wav')))
         for filename in filenames:
-            # divide into groups
+            # 切分成一個個group
             sub_filename = filename.strip().split('/')[-1]
-            # format: p{speaker}_{sid}.wav
+            # 格式為: p{speaker}_{sid}.wav
             speaker_id, utt_id = re.match(r'p(\d+)_(\d+)\.wav', sub_filename).groups()
             filename_groups[speaker_id].append(filename)
         for speaker_id, filenames in filename_groups.items():
-            # only use the speakers who are English accent.
-            if speaker_id not in accent2speaker['English']:
+            # 挑出所選取的口音
+            if speaker_id not in accent2speaker['Mixture']:
                 continue
             print('processing {}'.format(speaker_id))
             train_size = int(len(filenames) * proportion)
             for i, filename in enumerate(filenames):
                 sub_filename = filename.strip().split('/')[-1]
-                # format: p{speaker}_{sid}.wav
+                # 格式為: p{speaker}_{sid}.wav
                 speaker_id, utt_id = re.match(r'p(\d+)_(\d+)\.wav', sub_filename).groups()
+                #以spectrograms形式存於.h5files裡面並同時劃分訓練測試集
                 _, lin_spec = get_spectrograms(filename)
                 if i < train_size:
                     datatype = 'train'

@@ -7,6 +7,7 @@ import random
 
 class Sampler(object):
     def __init__(self, h5_path, dset, seg_len, used_speaker_path):
+        #從.h5 file裡讀入speaker info 與字句訊息
         self.dset = dset
         self.f_h5 = h5py.File(h5_path, 'r')
         self.seg_len = seg_len
@@ -15,7 +16,8 @@ class Sampler(object):
         self.n_speaker = len(self.speakers)
         print(self.speakers)
         self.speaker2utts = {speaker:list(self.f_h5[f'{dset}/{speaker}'].keys()) for speaker in self.speakers}
-        # remove too short utterence
+        
+        # 移除時間過短字句
         self.rm_too_short_utt(limit=self.seg_len)
         self.single_indexer = namedtuple('single_index', ['speaker', 'i', 't'])
 
@@ -39,7 +41,7 @@ class Sampler(object):
             return speakers     
 
     def sample_utt(self, speaker_id, n_samples=1):
-        # sample an utterence
+        # 取樣各個字句
         dset = self.dset
         utt_ids = random.sample(self.speaker2utts[speaker_id], n_samples)
         lengths = [self.f_h5[f'{dset}/{speaker_id}/{utt_id}'].shape[0] for utt_id in utt_ids]

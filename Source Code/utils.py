@@ -106,6 +106,21 @@ class Hps(object):
         with open(path, 'w') as f_json:
             json.dump(self._hps._asdict(), f_json, indent=4, separators=(',', ': '))
 
+"""
+class Indexer(object):
+    def __init__(self, h5_path='/media/msplab/d8ad5387-7e7b-49bd-9643-b97070e119b7/Multi_target_Voice_Conversion/voice_conversion/preprocess/f_10_h5/f_10.h5', norm_h5_path='/media/msplab/d8ad5387-7e7b-49bd-9643-b97070e119b7/Multi_target_Voice_Conversion/voice_conversion/preprocess/f_10_h5/f_10.h5'):
+        self.h5 = h5py.File(h5_path, 'r')
+        self.norm_h5 = h5py.File(norm_h5_path, 'r')
+
+    def index(self, speaker_id, utt_id, dset='train', feature='mc'):
+        return self.h5[f'{dset}/{speaker_id}/{utt_id}/{feature}'][:]
+        
+    def get_mean_std(self, speaker_id, feature='mc'):
+        mean = self.norm_h5[f'{speaker_id}/{feature}_mean']
+        std = self.norm_h5[f'{speaker_id}/{feature}_std']
+        return mean, std
+"""
+
 class DataLoader(object):
     def __init__(self, dataset, batch_size=16):
         self.dataset = dataset

@@ -61,7 +61,7 @@ class Solver(object):
                 'decoder': self.Decoder.state_dict(),
                 'generator': self.Generator.state_dict(),
             }
-        new_model_path = '{}-{}'.format(model_path, iteration)
+        new_model_path = '{}-{}{}'.format(model_path, iteration, ".pkd")
         with open(new_model_path, 'wb') as f_out:
             torch.save(all_model, f_out)
         self.model_kept.append(new_model_path)
@@ -147,17 +147,33 @@ class Solver(object):
         hps = self.hps
         if mode == 'pretrain_G':
             for iteration in range(hps.enc_pretrain_iters):
+                
+                
                 data = next(self.data_loader)
+                #載入資料
                 c, x = self.permute_data(data)
-                # encode
+                #c, x分別為本次訓的第位語者，以及該者語音訊號
+                
+                # encode--------------------------
                 enc = self.encode_step(x)
                 x_tilde = self.decode_step(enc, c)
+                #由encoder壓縮出不含語者資訊的enc後插入c語者資訊
                 loss_rec = torch.mean(torch.abs(x_tilde - x))
+                #計算由編解碼器訓練出來語音訊號與原始語音訊號的差
                 reset_grad([self.Encoder, self.Decoder])
+                #需要在開始進行反向傳播之前明確地將梯度設置為零
+                #因為PyTorch在隨後的反向傳遞中累積梯度
+                
                 loss_rec.backward()
+                #反向傳遞
                 grad_clip([self.Encoder, self.Decoder], self.hps.max_grad_norm)
+                #避免梯度爆炸，我們使用梯度截斷
+                #將梯度約束於某個區間
                 self.ae_opt.step()
-                # tb info
+                #Adam Optimizer
+        
+        
+                # log info-------------------------------
                 info = {
                     f'{flag}/pre_loss_rec': loss_rec.item(),
                 }
@@ -167,21 +183,35 @@ class Solver(object):
                 if iteration % 100 == 0:
                     for tag, value in info.items():
                         self.logger.scalar_summary(tag, value, iteration + 1)
+        
+        
         elif mode == 'pretrain_D':
             for iteration in range(hps.dis_pretrain_iters):
                 data = next(self.data_loader)
                 c, x = self.permute_data(data)
-                # encode
+                
+                # encode------------------------
                 enc = self.encode_step(x)
-                # classify speaker
+                
+                # classify speaker--------------
                 logits = self.clf_step(enc)
+                #clf_step為使用語者分類器
+                #輸入為enc(x)，輸出為語者編號c語者的資訊分佈
                 loss_clf = self.cal_loss(logits, c)
-                # update 
+                #計算由分類器產生的語者編號c語者的資訊分佈與真實C之間的loss
+        
+                # update-------------------------
                 reset_grad([self.SpeakerClassifier])
+                #需要在開始進行反向傳播之前明確地將梯度設置為零
+                #因為PyTorch在隨後的反向傳遞中累積梯度
                 loss_clf.backward()
                 grad_clip([self.SpeakerClassifier], self.hps.max_grad_norm)
+                #避免梯度爆炸，我們使用梯度截斷
+                #將梯度約束於某個區間
                 self.clf_opt.step()
-                # calculate acc
+                #Adam Optimizer
+        
+                # calculate acc---------------------
                 acc = cal_acc(logits, c)
                 info = {
                     f'{flag}/pre_loss_clf': loss_clf.item(),
@@ -193,97 +223,41 @@ class Solver(object):
                 if iteration % 100 == 0:
                     for tag, value in info.items():
                         self.logger.scalar_summary(tag, value, iteration + 1)
-        elif mode == 'patchGAN':
-            for iteration in range(hps.patch_iters):
-                #=======train D=========#
-                for step in range(hps.n_patch_steps):
-                    data = next(self.data_loader)
-                    c, x = self.permute_data(data)
-                    ## encode
-                    enc = self.encode_step(x)
-                    # sample c
-                    c_prime = self.sample_c(x.size(0))
-                    # generator
-                    x_tilde = self.gen_step(enc, c_prime)
-                    # discriminstor
-                    w_dis, real_logits, gp = self.patch_step(x, x_tilde, is_dis=True)
-                    # aux classification loss 
-                    loss_clf = self.cal_loss(real_logits, c)
-                    loss = -hps.beta_dis * w_dis + hps.beta_clf * loss_clf + hps.lambda_ * gp
-                    reset_grad([self.PatchDiscriminator])
-                    loss.backward()
-                    grad_clip([self.PatchDiscriminator], self.hps.max_grad_norm)
-                    self.patch_opt.step()
-                    # calculate acc
-                    acc = cal_acc(real_logits, c)
-                    info = {
-                        f'{flag}/w_dis': w_dis.item(),
-                        f'{flag}/gp': gp.item(), 
-                        f'{flag}/real_loss_clf': loss_clf.item(),
-                        f'{flag}/real_acc': acc, 
-                    }
-                    slot_value = (step, iteration+1, hps.patch_iters) + tuple([value for value in info.values()])
-                    log = 'patch_D-%d:[%06d/%06d], w_dis=%.2f, gp=%.2f, loss_clf=%.2f, acc=%.2f'
-                    print(log % slot_value)
-                    if iteration % 100 == 0:
-                        for tag, value in info.items():
-                            self.logger.scalar_summary(tag, value, iteration + 1)
-                #=======train G=========#
-                data = next(self.data_loader)
-                c, x = self.permute_data(data)
-                # encode
-                enc = self.encode_step(x)
-                # sample c
-                c_prime = self.sample_c(x.size(0))
-                # generator
-                x_tilde = self.gen_step(enc, c_prime)
-                # discriminstor
-                loss_adv, fake_logits = self.patch_step(x, x_tilde, is_dis=False)
-                # aux classification loss 
-                loss_clf = self.cal_loss(fake_logits, c_prime)
-                loss = hps.beta_clf * loss_clf + hps.beta_gen * loss_adv
-                reset_grad([self.Generator])
-                loss.backward()
-                grad_clip([self.Generator], self.hps.max_grad_norm)
-                self.gen_opt.step()
-                # calculate acc
-                acc = cal_acc(fake_logits, c_prime)
-                info = {
-                    f'{flag}/loss_adv': loss_adv.item(),
-                    f'{flag}/fake_loss_clf': loss_clf.item(),
-                    f'{flag}/fake_acc': acc, 
-                }
-                slot_value = (iteration+1, hps.patch_iters) + tuple([value for value in info.values()])
-                log = 'patch_G:[%06d/%06d], loss_adv=%.2f, loss_clf=%.2f, acc=%.2f'
-                print(log % slot_value)
-                if iteration % 100 == 0:
-                    for tag, value in info.items():
-                        self.logger.scalar_summary(tag, value, iteration + 1)
-                if iteration % 1000 == 0 or iteration + 1 == hps.patch_iters:
-                    self.save_model(model_path, iteration + hps.iters)
+        
         elif mode == 'train':
             for iteration in range(hps.iters):
                 # calculate current alpha
                 if iteration < hps.lat_sched_iters:
                     current_alpha = hps.alpha_enc * (iteration / hps.lat_sched_iters)
+                    #hps.alpha_enc初始為0.01 我們希望藉由訓練次數的增加逐漸提高encoder權重
                 else:
                     current_alpha = hps.alpha_enc
+                
                 #==================train D==================#
                 for step in range(hps.n_latent_steps):
+                    
                     data = next(self.data_loader)
                     c, x = self.permute_data(data)
-                    # encode
+                    # encode---------------
                     enc = self.encode_step(x)
-                    # classify speaker
+                    # classify speaker-----------
                     logits = self.clf_step(enc)
+                    #clf_step為使用語者分類器
+                    #輸入為enc(x)，輸出為語者編號c語者的資訊分佈
+                    
                     loss_clf = self.cal_loss(logits, c)
+                    #計算由分類器產生的語者編號c語者的資訊分佈與真實C之間的loss
                     loss = hps.alpha_dis * loss_clf
-                    # update 
+                    #初始hps.alpha_dis=1 
+                    
+                    # update--------------------
                     reset_grad([self.SpeakerClassifier])
                     loss.backward()
                     grad_clip([self.SpeakerClassifier], self.hps.max_grad_norm)
                     self.clf_opt.step()
-                    # calculate acc
+                    #Adam Optimizer
+        
+                    # calculate acc-------------
                     acc = cal_acc(logits, c)
                     info = {
                         f'{flag}/D_loss_clf': loss_clf.item(),
@@ -295,24 +269,37 @@ class Solver(object):
                     if iteration % 100 == 0:
                         for tag, value in info.items():
                             self.logger.scalar_summary(tag, value, iteration + 1)
+                
                 #==================train G==================#
                 data = next(self.data_loader)
                 c, x = self.permute_data(data)
-                # encode
+                # encode--------------
                 enc = self.encode_step(x)
-                # decode
+                # decode----------------
                 x_tilde = self.decode_step(enc, c)
+                #由decoder把encoder壓縮初不含語者資訊的enc後插入c語者資訊
+                #並藉由c還原回原始語音
                 loss_rec = torch.mean(torch.abs(x_tilde - x))
-                # classify speaker
+                #計算經decoder產生與原始語音的loss
+                
+                # classify speaker--------------------
                 logits = self.clf_step(enc)
+                
                 acc = cal_acc(logits, c)
+                #計算由分類器產生的c語者的資訊分佈的準確率
                 loss_clf = self.cal_loss(logits, c)
-                # maximize classification loss
+                #計算由分類器產生的語者編號c語者的資訊分佈與真實C之間的loss
+                
+                # maximize classification loss---------------
                 loss = loss_rec - current_alpha * loss_clf
+                #藉由逐步iteration的訓練中調整loss以免梯度消失
                 reset_grad([self.Encoder, self.Decoder])
                 loss.backward()
                 grad_clip([self.Encoder, self.Decoder], self.hps.max_grad_norm)
                 self.ae_opt.step()
+                #Adam Optimizer
+        
+                # calculate acc-------------
                 info = {
                     f'{flag}/loss_rec': loss_rec.item(),
                     f'{flag}/G_loss_clf': loss_clf.item(),
@@ -327,4 +314,97 @@ class Solver(object):
                         self.logger.scalar_summary(tag, value, iteration + 1)
                 if iteration % 1000 == 0 or iteration + 1 == hps.iters:
                     self.save_model(model_path, iteration)
-
+        
+        
+        elif mode == 'patchGAN':
+            for iteration in range(hps.patch_iters):
+                #=======train D=========#
+                for step in range(hps.n_patch_steps):
+                    data = next(self.data_loader)
+                    c, x = self.permute_data(data)
+                    ## encode------------
+                    enc = self.encode_step(x)
+                    
+                    # sample c------------
+                    c_prime = self.sample_c(x.size(0))
+                    #從本次訓練的語者中取x個次數，取過的可以再取
+                    
+                    # generator-------------------
+                    x_tilde = self.gen_step(enc, c_prime)
+                    #使用decoder與generator合成出我們所取到的語者語音
+                    
+                    # discriminstor------------------------
+                    w_dis, real_logits, gp = self.patch_step(x, x_tilde, is_dis=True)
+                    #w_dis為真實語音與由generator產生的語音之兩者差
+                    #real_logits為真實語音經Discriminator產生語者編號c語者的資訊分佈
+                    #gp為計算gradient penalty
+                    
+                    # classification loss----------------
+                    loss_clf = self.cal_loss(real_logits, c)
+                    #計算由Discriminator產生的真實語音語者編號c語者的資訊分佈與真實C之間的loss
+                    loss = -hps.beta_dis * w_dis + hps.beta_clf * loss_clf + hps.lambda_ * gp
+                    #藉由逐步iteration的訓練中調整loss以免梯度消失
+                    reset_grad([self.PatchDiscriminator])
+                    loss.backward()
+                    grad_clip([self.PatchDiscriminator], self.hps.max_grad_norm)
+                    self.patch_opt.step()
+                    #Adam Optimizer
+        
+                    # calculate acc---------------
+                    acc = cal_acc(real_logits, c)
+                    info = {
+                        f'{flag}/w_dis': w_dis.item(),
+                        f'{flag}/gp': gp.item(), 
+                        f'{flag}/real_loss_clf': loss_clf.item(),
+                        f'{flag}/real_acc': acc, 
+                    }
+                    slot_value = (step, iteration+1, hps.patch_iters) + tuple([value for value in info.values()])
+                    log = 'patch_D-%d:[%06d/%06d], w_dis=%.2f, gp=%.2f, loss_clf=%.2f, acc=%.2f'
+                    print(log % slot_value)
+                    if iteration % 100 == 0:
+                        for tag, value in info.items():
+                            self.logger.scalar_summary(tag, value, iteration + 1)
+                
+                #=======train G=========#
+                data = next(self.data_loader)
+                c, x = self.permute_data(data)
+                # encode-----------------
+                enc = self.encode_step(x)
+        
+                # sample c-----------------
+                c_prime = self.sample_c(x.size(0))
+        
+                # generator---------------
+                x_tilde = self.gen_step(enc, c_prime)
+                
+                # discriminstor------------------
+                loss_adv, fake_logits = self.patch_step(x, x_tilde, is_dis=False)
+                #loss_adv為由generator經Discriminator產生語者編號c語者平均
+                #fake_logits為generator經Discriminator產生語者編號c語者的資訊分佈
+        
+                # classification loss-----------------
+                loss_clf = self.cal_loss(fake_logits, c_prime)
+                #計算由generator經Discriminator產生的語者編號c語者的資訊分佈與真實C之間的loss
+                loss = hps.beta_clf * loss_clf + hps.beta_gen * loss_adv
+                #藉由逐步iteration的訓練中調整loss以免梯度消失
+                reset_grad([self.Generator])
+                loss.backward()
+                grad_clip([self.Generator], self.hps.max_grad_norm)
+                self.gen_opt.step()
+                #Adam Optimizer
+        
+                # calculate acc--------
+                acc = cal_acc(fake_logits, c_prime)
+                info = {
+                    f'{flag}/loss_adv': loss_adv.item(),
+                    f'{flag}/fake_loss_clf': loss_clf.item(),
+                    f'{flag}/fake_acc': acc, 
+                }
+                slot_value = (iteration+1, hps.patch_iters) + tuple([value for value in info.values()])
+                log = 'patch_G:[%06d/%06d], loss_adv=%.2f, loss_clf=%.2f, acc=%.2f'
+                print(log % slot_value)
+                if iteration % 100 == 0:
+                    for tag, value in info.items():
+                        self.logger.scalar_summary(tag, value, iteration + 1)
+                if iteration % 1000 == 0 or iteration + 1 == hps.patch_iters:
+                    self.save_model(model_path, iteration + hps.iters)

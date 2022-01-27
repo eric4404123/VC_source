@@ -6,9 +6,8 @@ https://www.github.com/kyubyong/dc_tts
 '''
 from __future__ import print_function, division
 
-#from hyperparams import Hyperparams as hp
 import numpy as np
-#import tensorflow as tf
+import tensorflow as tf
 import librosa
 import copy
 import matplotlib
